@@ -1,6 +1,42 @@
-# Taylorformer
+# 因为MB-Taylorformer太难懂了，所以准备自己复现Taylorformer
+
+# Taylorformer是基于tensorflow的，我用不习惯，因此我准备用pytorch复现。
+
+## Taylorformer-tensorflow文件结构：
 
 Our model architecture is shown below:
+
+    ┬─ __init__.py
+    ├─ pre_trained_model_ex.py
+    ├─ training_and_evaluating_models.py
+    ├─ data_wrangler
+    │   ├─ __init__.py
+    │   ├─ batcher.py
+    │   ├─ dataset_preparer.py
+    │   └─ feature_extractor.py
+    ├─ comparison_models/tnp
+    │   ├─ __init__.py
+    │   ├─ tnp.py
+    │   └─ tnp_pipeline.py
+    ├─ model
+    │   ├─ __init__.py
+    │   ├─ dot_prod.py
+    │   ├─ losses.py
+    │   ├─ taylorformer.py
+    │   ├─ taylorformer_graph.py
+    │   └─ taylorformer_pipeline.py
+    └─ weights_/forecasting/ETT/taylorformer/96/ckpt
+        ├─ check_run_0
+        │   ├─ checkpoint
+        │   ├─ ckpt-37.data-00000-of-00001
+        │   └─ ckpt-37.index
+        ├─ check_run_1
+        │   ├─ checkpoint
+        │   ├─ ckpt-26.data-00000-of-00001
+        │   └─ ckpt-26.index
+        └─ ... (chekpoint name)
+
+## 网络结构图例：（我没看懂）
 
 <img width="784" alt="image" src="https://github.com/oremnirv/ATP/assets/54116509/7a8f1e82-4f91-4cb2-89ec-748f8556529a">
 
