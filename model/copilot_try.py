@@ -1251,11 +1251,7 @@ def nll(y, μ, log_σ, ϵ=0.001):
     sum_mse = torch.sum(mse_per_point)
     
     return lik_per_point, sum_mse, sum_lik, torch.mean(lik_per_point), torch.mean(mse_per_point)
-﻿
-Sure, here is a PyTorch version of the provided code:
-
-1. **Data Wrangler**﻿
-python
+ython
 import numpy as np
 import pandas as pd
 import torch
@@ -1327,9 +1323,7 @@ def gp_data_processor(path_to_data_folder):
 
     return x_train, y_train, x_val, y_val, x_test, y_test, context_n_test
 
-﻿
-2. **Pipeline Wrapper**﻿
-python
+ython
 import torch
 import numpy as np
 from model import dot_prod
@@ -1559,4 +1553,297 @@ class DE(torch.nn.Module):
         #target selection
 
         current_x = x_values[:, context_n:context_n+target_m]
-        current_y = y_values[:, context_n:context_
+        current_y = y_values[:, context_n:context_ ython
+import torch
+import numpy as np
+import pandas as pd
+
+def training_loop(model_pipeline, optimizer, train_x, train_y, test_x, test_y, device, epochs=100, lr_scheduler=None, save_info=False,
+                save_name=None):
+    model_pipeline.train()
+    model_pipeline.to(device)
+    test_x = test_x.to(device)
+    test_y = test_y.to(device)
+    train_x = train_x.to(device)
+    train_y = train_y.to(device)
+    best_loss = 100
+    step = 1
+    for epoch in range(epochs):
+        # Get predictions from the model
+        x, y = train_x, train_y
+        # x = np.repeat(np.linspace(-1, 1, n_C + n_T)[np.newaxis, :, np.newaxis], axis=0, repeats=batch_size)  # it doesnt matter what the time is, just the relation between the times.
+        optimizer.zero_grad()
+
+        μ, log_σ = model_pipeline([x, y])
+
+        # evaluate loss
+        lik_per_point, sum_mse, sum_lik, mean_lik_per_point, mean_mse = nll(y[:, n_C:], μ, log_σ)
+        loss = -1. * sum_lik
+
+        # perform back propagation
+        loss.backward()
+
+        # perform optimization step
+        optimizer.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
+        if epoch % 10 == 0:
+            model_pipeline.eval()
+            with torch.no_grad():
+                y_hat, log_σ = model_pipeline([test_x, test_y])
+                lik_per_point, sum_mse, sum_lik, mean_lik_per_point, mean_mse = nll(test_y[:, n_C:], y_hat, log_σ)
+            val_loss = -1. * sum_lik
+
+            print(f'Epoch: {epoch}, Loss: {-1. * mean_lik_per_point.item():.4f}, Val Loss: {-1. * mean_lik_per_point.item():.4f}')
+            if val_loss < best_loss:
+                best_loss = val_loss
+                step = epoch
+                if save_info:
+                    torch.save(model_pipeline.state_dict(), f'{save_name}_step{step}.ckpt')
+
+def training_loop_classification(model_pipeline, optimizer, train_x, train_y, test_x, test_y, device, epochs=100, lr_scheduler=None, save_info=False,
+                save_name=None):
+    model_pipeline.train()
+    model_pipeline.to(device)
+    test_x = test_x.to(device)
+    test_y = test_y.to(device)
+    train_x = train_x.to(device)
+    train_y = train_y.to(device)
+    best_loss = 100
+    step = 1
+    for epoch in range(epochs):
+        # Get predictions from the model
+        x, y = train_x, train_y
+        # x = np.repeat(np.linspace(-1, 1, n_C + n_T)[np.newaxis, :, np.newaxis], axis=0, repeats=batch_size)  # it doesnt matter what the time is, just the relation between the times.
+        optimizer.zero_grad()
+
+        logits = model_pipeline([x, y])
+
+        # evaluate loss
+        loss = torch.nn.BCEWithLogitsLoss()(logits, y)
+
+        # perform back propagation
+        loss.backward()
+
+        # perform optimization step
+        optimizer.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
+        if epoch % 10 == 0:
+            model_pipeline.eval()
+            with torch.no_grad():
+                logits = model_pipeline([test_x, test_y])
+                val_loss = torch.nn.BCEWithLogitsLoss()(logits, y)
+
+            print(f'Epoch: {epoch}, Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
+            if val_loss < best_loss:
+                best_loss = val_loss
+                step = epoch
+                if save_info:
+                    torch.save(model_pipeline.state_dict(), f'{save_name}_step{step}.ckpt')
+
+﻿
+Sure, here is a PyTorch implementation of the taylorformer model:﻿
+python
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+
+class FFN(nn.Module):
+    def __init__(self, output_shape, dropout_rate=0.1):
+        super().__init__()
+
+        self.dense_a = nn.Linear(output_shape, output_shape)
+        self.dense_b = nn.Linear(output_shape, output_shape)
+        self.dense_c = nn.Linear(output_shape, output_shape)
+        self.layernorm = [nn.LayerNorm(output_shape) for _ in range(2)]
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x, query, training=True):
+        ## call layer after first MHA_X
+        ## x is the output of MHA_X_1
+        ## query is query input to MHA_X_1
+
+        query = self.dense_a(query)
+        x += query
+        x = self.layernorm[0](x)
+        x_skip = x
+        x = self.dense_b(x)
+        x = F.gelu(x)
+        x = self.dropout(x, training=training)
+        x = self.dense_c(x)
+        x += x_skip
+        return self.layernorm[1](x)
+
+
+class FFN_o(nn.Module):
+    def __init__(self, output_shape, dropout_rate=0.1):
+        super().__init__()
+
+        self.dense_b = nn.Linear(output_shape, output_shape)
+        self.dense_c = nn.Linear(output_shape, output_shape)
+        self.layernorm = [nn.LayerNorm(output_shape) for _ in range(2)]
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x, query, training=True):
+        ## query is the output of previous MHA_X layer
+        ## x is query input to MHA_X_o
+
+        x += query
+        x = self.layernorm[0](x)
+        x_skip = x
+        x = self.dense_b(x)
+        x = F.gelu(x)
+        x = self.dropout(x, training=training)
+        x = self.dense_c(x)
+        x += x_skip
+        return self.layernorm[1](x)
+
+
+class MHA_X_a(nn.Module):
+    def __init__(self,
+                 num_heads,
+                 projection_shape,
+                 output_shape,
+                 dropout_rate=0.1):
+        super().__init__()
+        self.mha = dot_prod.MultiHeadAttention(num_heads, output_shape, projection_shape)
+        self.ffn = FFN(output_shape, dropout_rate)
+
+    def forward(self, query, key, value, mask, training=True):
+        x = self.mha(query, key, value, mask)
+        x = self.ffn(x, query, training=training)  # Shape `(batch_size, seq_len, output_shape)`.
+        return x
+
+
+class MHA_XY_a(nn.Module):
+    def __init__(self,
+                 num_heads,
+                 projection_shape,
+                 output_shape,
+                 dropout_rate=0.1):
+        super().__init__()
+        self.mha = dot_prod.MultiHeadAttention(num_heads, output_shape, projection_shape)
+        self.ffn = FFN(output_shape, dropout_rate)
+
+    def forward(self, query, key, value, mask, training=True):
+        x = self.mha(query, key, value, mask)
+        x = self.ffn(x, query, training=training)  # Shape `(batch_size, seq_len, output_shape)`.
+
+        return x
+
+
+class MHA_X_b(nn.Module):
+    def __init__(self,
+                 num_heads,
+                 projection_shape,
+                 output_shape,
+                 dropout_rate=0.1):
+        super().__init__()
+        self.mha = dot_prod.MultiHeadAttention(num_heads, output_shape, projection_shape)
+        self.ffn = FFN_o(output_shape, dropout_rate)
+
+    def forward(self, query, key, value, mask, training=True):
+        x = self.mha(query, key, value, mask)
+        x = self.ffn(x, query, training=training)  # Shape `(batch_size, seq_len, output_shape)`.
+
+        return x
+
+
+class MHA_XY_b(nn.Module):
+    def __init__(self,
+                 num_heads,
+                 projection_shape,
+                 output_shape,
+                 dropout_rate=0.1):
+        super().__init__()
+        self.mha = dot_prod.MultiHeadAttention(num_heads, output_shape, projection_shape)
+        self.ffn = FFN_o(output_shape, dropout_rate)
+
+    def forward(self, query, key, value, mask, training=True):
+        x = self.mha(query, key, value, mask)
+        x = self.ffn(x, query, training=training)  # Shape `(batch_size, seq_len, output_shape)`.
+        return x
+
+
+class taylorformer(nn.Module):
+    def __init__(self, num_heads,
+                 projection_shape,
+                 output_shape,
+                 num_layers,
+                 dropout_rate=0.1, target_y_dim=1,
+                 bound_std=False
+                 ):
+        super().__init__()
+
+        self.num_layers = num_layers
+
+        self.mha_x_a = MHA_X_a(num_heads,
+                               projection_shape,
+                               output_shape,
+                               dropout_rate=dropout_rate)
+
+        self.mha_x_b = [MHA_X_b(num_heads,
+                               projection_shape,
+                               output_shape,
+                               dropout_rate=dropout_rate) for _ in range(num_layers - 1)]
+
+        self.mha_xy_a = MHA_XY_a(num_heads,
+                                 projection_shape,
+                                 output_shape, dropout_rate=dropout_rate)
+
+        self.mha_xy_b = [MHA_XY_b(num_heads,
+                                 projection_shape,
+                                 output_shape, dropout_rate=dropout_rate) for _ in range(num_layers - 1)]
+
+        self.linear_layer = nn.Linear(output_shape, output_shape)
+
+        self.dense_sigma = nn.Linear(output_shape, target_y_dim)
+        self.dense_last = nn.Linear(output_shape, target_y_dim)
+        self.bound_std = bound_std
+
+    def forward(self, input, training=True):
+        query_x, key_x, value_x, query_xy, key_xy, value_xy, mask, y_n = input
+
+        x = self.mha_x_a(query_x, query_x, query_x, mask, training=training)
+        xy = self.mha_xy_a(query_xy, key_xy, value_xy, mask, training=training)
+
+        for i in range(self.num_layers - 2):
+
+            xy = self.mha_xy_b[i](xy, xy, xy, mask, training=training)
+            x = self.mha_x_b[i](x, x, x, mask, training=training)
+
+        xy = self.mha_xy_b[-1](xy, xy, xy, mask, training=training)
+        x = self.mha_x_b[-1](x, x, value_x, mask, training=training)
+
+        combo = torch.cat([x, xy], axis=2)
+        z = self.linear_layer(combo)
+
+        log_sigma = self.dense_sigma(z)
+
+        mu = self.dense_last(z) + y_n
+
+        sigma = torch.exp(log_sigma)
+        if self.bound_std:
+
+            sigma = 0.01 + 0.99 * torch.softplus(log_sigma)
+
+        log_sigma = torch.log(sigma)
+
+        return mu, log_sigma
+﻿
+You can use this model by instantiating it as follows:﻿
+python
+model = taylorformer(num_heads=6, projection_shape_for_head=8, output_shape=48, rate=0.1, permutation_repeats=0,
+                    bound_std=False, num_layers=4, enc_dim=32, xmin=0.1, xmax=1, MHAX="xxx").cuda()
+﻿
+Then, you can train the model using the following code:﻿
+python
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
+training_loop(model, optimizer, train_x, train_y, test_x, test_y, device="cuda", epochs=100, lr_scheduler=lr_scheduler, save_info=True,
+                save_name="taylorformer")
+```
