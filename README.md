@@ -1,6 +1,6 @@
 # 因为MB-Taylorformer太难懂了，所以准备自己复现Taylorformer
 
-## Taylorformer是基于tensorflow的，我用不习惯，因此我准备用pytorch复现。
+### Taylorformer是基于tensorflow的，我用不习惯，因此我准备用pytorch复现。
 
 ## Taylorformer-tensorflow文件结构：
 
