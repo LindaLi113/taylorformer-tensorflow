@@ -1644,9 +1644,7 @@ def training_loop_classification(model_pipeline, optimizer, train_x, train_y, te
                 if save_info:
                     torch.save(model_pipeline.state_dict(), f'{save_name}_step{step}.ckpt')
 
-﻿
-Sure, here is a PyTorch implementation of the taylorformer model:﻿
-python
+ython
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -1834,16 +1832,368 @@ class taylorformer(nn.Module):
         log_sigma = torch.log(sigma)
 
         return mu, log_sigma
-﻿
-You can use this model by instantiating it as follows:﻿
-python
+ython
 model = taylorformer(num_heads=6, projection_shape_for_head=8, output_shape=48, rate=0.1, permutation_repeats=0,
                     bound_std=False, num_layers=4, enc_dim=32, xmin=0.1, xmax=1, MHAX="xxx").cuda()
-﻿
-Then, you can train the model using the following code:﻿
-python
+ython
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.9)
 training_loop(model, optimizer, train_x, train_y, test_x, test_y, device="cuda", epochs=100, lr_scheduler=lr_scheduler, save_info=True,
                 save_name="taylorformer")
-```
+﻿
+Sure, here is the PyTorch implementation of the training loop and data pre-processing functions:﻿
+python
+import torch
+import numpy as np
+from model import dot_prod, taylorformer, FFN, MHA_X_a, MHA_XY_a, MHA_X_b, MHA_XY_b, FFN_o
+from data_wrangler import dataset_processor, electricity_processor, gp_data_processor, FeatureExtractor, DE
+
+
+def training_loop(model_pipeline, optimizer, train_x, train_y, test_x, test_y, device, epochs=100, lr_scheduler=None, save_info=False,
+                save_name=None):
+    model_pipeline.train()
+    model_pipeline.to(device)
+    test_x = test_x.to(device)
+    test_y = test_y.to(device)
+    train_x = train_x.to(device)
+    train_y = train_y.to(device)
+    best_loss = 100
+    step = 1
+    for epoch in range(epochs):
+        # Get predictions from the model
+        x, y = train_x, train_y
+        # x = np.repeat(np.linspace(-1, 1, n_C + n_T)[np.newaxis, :, np.newaxis], axis=0, repeats=batch_size)  # it doesnt matter what the time is, just the relation between the times.
+        optimizer.zero_grad()
+
+        μ, log_σ = model_pipeline([x, y])
+
+        # evaluate loss
+        lik_per_point, sum_mse, sum_lik, mean_lik_per_point, mean_mse = nll(y[:, n_C:], μ, log_σ)
+        loss = -1. * sum_lik
+
+        # perform back propagation
+        loss.backward()
+
+        # perform optimization step
+        optimizer.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
+        if epoch % 10 == 0:
+            model_pipeline.eval()
+            with torch.no_grad():
+                y_hat, log_σ = model_pipeline([test_x, test_y])
+                lik_per_point, sum_mse, sum_lik, mean_lik_per_point, mean_mse = nll(test_y[:, n_C:], y_hat, log_σ)
+            val_loss = -1. * sum_lik
+
+            print(f'Epoch: {epoch}, Loss: {-1. * mean_lik_per_point.item():.4f}, Val Loss: {-1. * mean_lik_per_point.item():.4f}')
+            if val_loss < best_loss:
+                best_loss = val_loss
+                step = epoch
+                if save_info:
+                    torch.save(model_pipeline.state_dict(), f'{save_name}_step{step}.ckpt')
+
+
+def training_loop_classification(model_pipeline, optimizer, train_x, train_y, test_x, test_y, device, epochs=100, lr_scheduler=None, save_info=False,
+                save_name=None):
+    model_pipeline.train()
+    model_pipeline.to(device)
+    test_x = test_x.to(device)
+    test_y = test_y.to(device)
+    train_x = train_x.to(device)
+    train_y = train_y.to(device)
+    best_loss = 100
+    step = 1
+    for epoch in range(epochs):
+        # Get predictions from the model
+        x, y = train_x, train_y
+        # x = np.repeat(np.linspace(-1, 1, n_C + n_T)[np.newaxis, :, np.newaxis], axis=0, repeats=batch_size)  # it doesnt matter what the time is, just the relation between the times.
+        optimizer.zero_grad()
+
+        logits = model_pipeline([x, y])
+
+        # evaluate loss
+        loss = torch.nn.BCEWithLogitsLoss()(logits, y)
+
+        # perform back propagation
+        loss.backward()
+
+        # perform optimization step
+        optimizer.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
+        if epoch % 10 == 0:
+            model_pipeline.eval()
+            with torch.no_grad():
+                logits = model_pipeline([test_x, test_y])
+                val_loss = torch.nn.BCEWithLogitsLoss()(logits, y)
+
+            print(f'Epoch: {epoch}, Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
+            if val_loss < best_loss:
+                best_loss = val_loss
+                step = epoch
+                if save_info:
+                    torch.save(model_pipeline.state_dict(), f'{save_name}_step{step}.ckpt')
+
+
+def dataset_processor(path_to_data):
+    # works for exchange and ETTm2 dataset w/o extra features
+
+    pd_array = pd.read_csv(path_to_data)
+    data = np.array(pd_array)
+    data[:, 0] = np.linspace(-1, 1, data.shape[0])
+    # we need to have it between -1 to 1 for each batch item not just overall!!!!!!!!
+
+    data = data.astype("float32")
+
+    training_data = data[:int(0.69 * data.shape[0])]
+    val_data = data[int(0.69 * data.shape[0]):int(0.8 * data.shape[0])]
+    test_data = data[int(0.8 * data.shape[0]):]
+
+    # scale
+
+    training_data_scaled = (training_data - np.mean(training_data, axis=0)) / np.std(training_data, axis=0)
+    val_data_scaled = (val_data - np.mean(training_data, axis=0)) / np.std(training_data, axis=0)
+    test_data_scaled = (test_data - np.mean(training_data, axis=0)) / np.std(training_data, axis=0)
+
+    train_x, train_y = torch.tensor(training_data_scaled[:, 1:]), torch.tensor(training_data_scaled[:, :1])
+    test_x, test_y = torch.tensor(val_data_scaled[:, 1:]), torch.tensor(val_data_scaled[:, :1])
+    val_x, val_y = torch.tensor(test_data_scaled[:, 1:]), torch.tensor(test_data_scaled[:, :1])
+
+    return train_x, train_y, val_x, val_y, test_x, test_y
+
+
+def electricity_processor(path_to_data):
+    data = np.load(path_to_data)
+    data = (data[322:323].transpose([1, 0])) # shape 14000 x 1
+
+    time = np.linspace(-1, 1, data.shape[0]) # shape 14000
+    time = time[:, np.newaxis] # shape 14000 x 1
+
+    data = np.concatenate([time, data], axis=1) # shape 14000 x 2
+
+    training_data = data[:int(0.69 * data.shape[0])]
+    val_data = data[int(0.69 * data.shape[0]):int(0.8 * data.shape[0])]
+    test_data = data[int(0.8 * data.shape[0]):]
+
+    # scale
+    training_data_scaled = (training_data - np.mean(training_data, axis=0)) / np.std(training_data, axis=0)
+    val_data_scaled = (val_data - np.mean(training_data, axis=0)) / np.std(training_data, axis=0)
+    test_data_scaled = (test_data - np.mean(training_data, axis=0)) / np.std(training_data, axis=0)
+
+    train_x, train_y = torch.tensor(training_data_scaled[:, 1:]), torch.tensor(training_data_scaled[:, :1])
+    test_x, test_y = torch.tensor(val_data_scaled[:, 1:]), torch.tensor(val_data_scaled[:, :1])
+    val_x, val_y = torch.tensor(test_data_scaled[:, 1:]), torch.tensor(test_data_scaled[:, :1])
+
+    return train_x, train_y, val_x, val_y, test_x, test_y
+
+
+def gp_data_processor(path_to_data_folder):
+
+    x = np.load(path_to_data_folder + "x.npy")
+    y = np.load(path_to_data_folder + "y.npy")
+
+    train_x = x[:int(0.99 * x.shape[0])]
+    train_y = y[:int(0.99 * y.shape[0])]
+    val_x = x[int(0.99 * x.shape[0]):]
+    val_y = y[int(0.99 * y.shape[0]):]
+
+    test_x = np.load(path_to_data_folder + "x_test.npy")
+    test_y = np.load(path_to_data_folder + "y_test.npy")
+
+    context_n_test = np.load(path_to_data_folder + "context_n_test.npy")
+
+    return train_x, train_y, val_x, val_y, test_x, test_y, context_n_test
+
+
+class FeatureExtractor(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def call(self, x_emb, y, y_diff, x_diff, d, x_n, y_n, n_C, n_T):
+
+        dim_x = x_n.shape[-1]
+        ##### inputs for the MHA-X head ######
+        value_x = y #check if identity is needed
+        x_prime = torch.cat([x_emb, x_diff, x_n], dim=2) ### check what is happening with embedding
+        query_x = x_prime
+        key_x = x_prime
+
+        ##### inputs for the MHA-XY head ######
+        y_prime = torch.cat([y, y_diff, d, y_n], dim=-1)
+        batch_s = torch.shape(y_prime)[0]
+        key_xy_label = torch.zeros((batch_s, n_C + n_T, 1))
+        value_xy = torch.cat([y_prime, key_xy_label, x_prime], dim=-1)
+        key_xy = value_xy
+        
+        query_xy_label = torch.concat([torch.zeros((batch_s, n_C, 1)), torch.ones((batch_s, n_T, 1))], dim=1)
+        y_prime_masked = torch.concat([self.mask_target_pt([y, n_C, n_T]), self.mask_target_pt([y_diff, n_C, n_T]), self.mask_target_pt([d, n_C, n_T]), y_n], dim=2)
+
+        query_xy = torch.concat([y_prime_masked, query_xy_label, x_prime], dim=-1)
+
+        return query_x, key_x, value_x, query_xy, key_xy, value_xy
+
+    def mask_target_pt(self, inputs):
+        y, n_C, n_T = inputs
+        dim = y.shape[-1]
+        batch_s = y.shape[0]
+
+        mask_y = torch.concat([y[:, :n_C], torch.zeros((batch_s, n_T, dim))], dim=1)
+        return mask_y
+
+    def permute(self, inputs):
+
+        x, y, n_C, _, num_permutation_repeats = inputs
+
+        if (num_permutation_repeats < 1):
+            return x, y
+
+        else:
+            # Shuffle traget only. tf.random.shuffle only works on the first dimension so we need tf.transpose.
+            x_permuted = torch.concat([torch.concat([x[:, :n_C, :], torch.transpose(torch.randperm(torch.transpose(x[:, n_C:, :], perm=[1, 0, 2])), perm=[1, 0, 2])], dim=1) for j in range(num_permutation_repeats)], dim=0)
+
+            y_permuted = torch.concat([torch.concat([y[:, :n_C, :], torch.transpose(torch.randperm(torch.transpose(y[:, n_C:, :], perm=[1, 0, 2])), perm=[1, 0, 2])], dim=1) for j in range(num_permutation_repeats)], dim=0)
+
+            return x_permuted, y_permuted
+
+
+class DE(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.batch_norm_layer = torch.nn.BatchNorm1d()
+
+    def call(self, y, x, n_C, n_T, training):
+
+        if (x.shape[-1] == 1):
+            y_diff, x_diff, d, x_n, y_n = self.derivative_function([y, x, n_C, n_T])
+        else:
+            y_diff, x_diff, d, x_n, y_n = self.derivative_function_2d([y, x, n_C, n_T])
+
+        d_1 = torch.where(torch.isnan(d), torch.tensor(10000.), d)
+        d_2 = torch.where(torch.abs(d) > 200., torch.tensor(0.), d)
+        d = self.batch_norm_layer(d_2, training=training)
+
+        d_label = torch.where(torch.eq(d_2, d_1), torch.tensor(1.), torch.tensor(0.))
+        d = torch.cat([d, d_label], dim=-1)
+
+        return y_diff, x_diff, d, x_n, y_n
+
+###### i think here what we do is calculate the derivative at the given y value and add that in as a feature. This is masked when making predictions
+    # so the derivative of other y values are what are seen
+    # Based on taylor expansion, a better feature would be including the derivative of the closest x point, where only seen y values are used for the differencing.
+    #this derivative wouldn't need masking.
+
+    # #### but you need mutli-dimensional y for the derivative
+
+    ####### and explain why we do this
+
+    def derivative_function(self, inputs):
+
+        y_values, x_values, context_n, target_m = inputs
+
+        epsilon = 0.000002
+
+        batch_size = y_values.shape[0]
+
+        dim_x = x_values.shape[-1]
+        dim_y = y_values.shape[-1]
+
+        #context section
+
+        current_x = x_values[:, :context_n]
+        current_y = y_values[:, :context_n]
+
+        x_temp = x_values[:, :context_n]
+        x_temp = torch.repeat_interleave(torch.unsqueeze(x_temp, dim=1), context_n, dim=1)
+
+        y_temp = y_values[:, :context_n]
+        y_temp = torch.repeat_interleave(torch.unsqueeze(y_temp, dim=1), context_n, dim=1)
+
+        ix = torch.argsort(torch.norm((current_x - x_temp), dim=-1), dim=-1)[:, :, 1]
+        selection_indices = torch.cat([torch.reshape(torch.repeat_interleave(torch.arange(batch_size * context_n), 1), (-1, 1)), torch.reshape(ix, (-1, 1))], dim=1)
+
+        x_closest = torch.reshape(torch.gather(torch.reshape(x_temp, (-1, context_n, dim_x)), selection_indices, dim=1), (batch_size, context_n, dim_x))
+
+        y_closest = torch.reshape(torch.gather(torch.reshape(y_temp, (-1, context_n, dim_y)), selection_indices, dim=1), (batch_size, context_n, dim_y))
+
+        x_rep = current_x[:, :, 0] - x_closest
+        y_rep = current_y[:, :, 0] - y_closest
+
+        deriv = y_rep / (epsilon + torch.norm(x_rep, dim=-1, keepdim=True))
+
+        dydx_dummy = deriv
+
+        diff_y_dummy = y_rep
+
+        diff_x_dummy = x_rep
+
+        closest_y_dummy = y_closest
+
+        closest_x_dummy = x_closest
+
+        #target selection
+
+        current_x = x_values[:, context_n:context_n+target_m]
+        current_y = y_values[:, context_n:context_n+target_m]
+
+        x_temp = torch.repeat_interleave(torch.unsqueeze(x_values[:, :target_m+context_n], dim=1), target_m, dim=1)
+        y_temp = torch.repeat_interleave(torch.unsqueeze(y_values[:, :target_m+context_n], dim=1), target_m, dim=1)
+
+        x_mask = torch.tril(torch.ones((target_m, context_n + target_m), dtype=bool), -1)
+        x_mask_inv = (x_mask == False)
+        x_mask_float = torch.where(x_mask_inv, torch.tensor(1.), torch.tensor(0.)) * 1000
+        x_mask_float_repeat = torch.repeat_interleave(torch.unsqueeze(x_mask_float, dim=0), batch_size, dim=0)
+        ix = torch.argsort(torch.norm((current_x - x_temp), dim=-1) + x_mask_float_repeat, dim=-1)[:, :, 1]
+
+        selection_indices = torch.cat([torch.reshape(torch.repeat_interleave(torch.arange(batch_size * target_m), 1), (-1, 1)), torch.reshape(ix, (-1, 1))], dim=1)
+
+        x_closest = torch.reshape(torch.gather(torch.reshape(x_temp, (-1, target_m+context_n, dim_x)), selection_indices, dim=1), (batch_size, target_m, dim_x))
+
+        y_closest = torch.reshape(torch.gather(torch.reshape(y_temp, (-1, target_m+context_n, dim_y)), selection_indices, dim=1), (batch_size, target_m, dim_y))
+
+        x_rep = current_x[:, :, 0] - x_closest
+        y_rep = current_y[:, :, 0] - y_closest
+
+        deriv = y_rep / (epsilon + torch.norm(x_rep, dim=-1, keepdim=True))
+
+        dydx_dummy = torch.cat([dydx_dummy, deriv], dim=1)
+        diff_y_dummy = torch.cat([diff_y_dummy, y_rep], dim=1)
+        diff_x_dummy = torch.cat([diff_x_dummy, x_rep], dim=1)
+        closest_y_dummy = torch.cat([closest_y_dummy, y_closest], dim=1)
+        closest_x_dummy = torch.cat([closest_x_dummy, x_closest], dim=1)
+
+        return diff_y_dummy, diff_x_dummy, dydx_dummy, closest_x_dummy, closest_y_dummy
+
+    def derivative_function_2d(self, inputs):
+
+        epsilon = 0.0000
+
+        def dydz(current_y, y_closest_1, y_closest_2, current_x, x_closest_1, x_closest_2):
+            #"z" is the second dim of x input
+            numerator = y_closest_2 - current_y[:, :, 0] - ((x_closest_2[:, :, :1]-current_x[:, :, 0, :1])*(y_closest_1-current_y[:, :, 0] ))/(x_closest_1[:, :, :1]-current_x[:, :, 0, :1] +epsilon)
+            denom = x_closest_2[:, :, 1:2] - current_x[:, :, 0, 1:2] - (x_closest_1[:, :, 1:2]-current_x[:, :, 0, 1:2])*(x_closest_2[:, :, :1]-current_x[:, :, 0, :1])/(x_closest_1[:, :, :1]-current_x[:, :, 0, :1]+epsilon)
+            dydz_pred = numerator/(denom+epsilon)
+            return dydz_pred
+
+        def dydx(dydz, current_y, y_closest_1, current_x, x_closest_1):
+            dydx = (y_closest_1-current_y[:, :, 0] - dydz*(x_closest_1[:, :, 1:2]-current_x[:, :, 0, 1:2]))/(x_closest_1[:, :, :1]-current_x[:, :, 0, :1]+epsilon)
+            return dydx
+
+        y_values, x_values, context_n, target_m = inputs
+
+        batch_size, length = y_values.shape[0], context_n + target_m
+
+        dim_x = x_values.shape[-1]
+        dim_y = y_values.shape[-1]
+
+        #context section
+
+        current_x = x_values[:, :context_n]
+        current_y = y_values[:, :context_n]
+
+        x_temp = x_values[:, :context_n]
+        x_temp = torch.repeat_interleave(torch.unsqueeze(x_temp, dim=1), context_n, dim=1)
+
+        y_temp = y_values[:, :context_n]
+        y
